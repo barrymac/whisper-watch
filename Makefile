@@ -1,5 +1,7 @@
 PUSH_REGISTRY ?= your-registry
 PULL_REGISTRY ?= your-registry
+
+-include Makefile.local
 IMAGE         := $(PUSH_REGISTRY)/whisper-bot
 NAMESPACE     := whisper-watch
 CHART         := ./chart
