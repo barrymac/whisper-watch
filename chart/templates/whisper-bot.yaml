@@ -13,11 +13,15 @@ spec:
   selector:
     matchLabels:
       app: whisper-bot
-  template:
-    metadata:
-      labels:
-        app: whisper-bot
-    spec:
+    template:
+      metadata:
+        labels:
+          app: whisper-bot
+        annotations:
+          prometheus.io/scrape: "true"
+          prometheus.io/path: "/metrics"
+          prometheus.io/port: "8080"
+      spec:
       containers:
         - name: whisper-bot
           image: {{ .Values.whisperBot.image }}:{{ .Values.whisperBot.imageTag }}
