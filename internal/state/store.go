@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS ww_contacts (
 	category_source TEXT NOT NULL DEFAULT 'unknown',
 	updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS ww_label_map (
+	category TEXT PRIMARY KEY,
+	label_id TEXT NOT NULL
+);
 `
 
 type Settings struct {
@@ -257,6 +262,63 @@ func (s *Store) ListUncategorised() ([]string, error) {
 		jids = append(jids, jid)
 	}
 	return jids, rows.Err()
+}
+
+func (s *Store) SetLabelMap(category, labelID string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO ww_label_map (category, label_id) VALUES ($1, $2)
+		 ON CONFLICT (category) DO UPDATE SET label_id = EXCLUDED.label_id`,
+		category, labelID,
+	)
+	return err
+}
+
+func (s *Store) GetLabelID(category string) (string, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT label_id FROM ww_label_map WHERE category = $1`, category).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
+func (s *Store) AllLabelMaps() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT category, label_id FROM ww_label_map`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[string]string)
+	for rows.Next() {
+		var cat, id string
+		if err := rows.Scan(&cat, &id); err != nil {
+			return nil, err
+		}
+		m[cat] = id
+	}
+	return m, rows.Err()
+}
+
+type CategorisedContact struct {
+	JID      string
+	Category string
+}
+
+func (s *Store) ListCategorised() ([]CategorisedContact, error) {
+	rows, err := s.db.Query(`SELECT jid, category FROM ww_contacts WHERE category != 'unknown' ORDER BY category, jid`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CategorisedContact
+	for rows.Next() {
+		var c CategorisedContact
+		if err := rows.Scan(&c.JID, &c.Category); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) CategoryStats() (map[string]int, error) {

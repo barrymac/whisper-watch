@@ -200,6 +200,12 @@ func (tb *TelegramBot) handleCommand(ctx context.Context, b *tgbot.Bot, msg *mod
 		tb.cmdListCategory(ctx, b, msg, strings.TrimPrefix(cmd, "/"))
 	case "/catstats":
 		tb.cmdCatStats(ctx, b, msg)
+	case "/labels":
+		tb.cmdLabels(ctx, b, msg)
+	case "/maplabel":
+		tb.cmdMapLabel(ctx, b, msg, args)
+	case "/synclabels":
+		tb.cmdSyncLabels(ctx, b, msg)
 	default:
 		tb.reply(ctx, b, msg.Chat.ID, "Unknown command. /help")
 	}
@@ -233,6 +239,9 @@ func (tb *TelegramBot) cmdHelp(ctx context.Context, b *tgbot.Bot, msg *models.Me
 		"  /catstats — category breakdown\n"+
 		"  /<cat> — list (personal/family/business/\n"+
 		"    service/commerce/government/spam)\n"+
+		"  /labels — show WhatsApp label IDs\n"+
+		"  /maplabel <cat> <id> — map category to label\n"+
+		"  /synclabels — apply labels to all categorised\n"+
 		"\n"+
 		"History:\n"+
 		"  /history <name> [n] — messages from contact\n"+
@@ -921,6 +930,8 @@ func (tb *TelegramBot) cmdBootstrap(ctx context.Context, b *tgbot.Bot, msg *mode
 	wg.Wait()
 
 	var classified int
+	labelMap, _ := tb.state.AllLabelMaps()
+
 	var sb strings.Builder
 	for _, o := range outcomes {
 		if o.err != nil {
@@ -932,7 +943,15 @@ func (tb *TelegramBot) cmdBootstrap(ctx context.Context, b *tgbot.Bot, msg *mode
 			continue
 		}
 		classified++
-		sb.WriteString(fmt.Sprintf("  %s → %s\n", o.ch.PushName, o.result.Category))
+		labelSuffix := ""
+		if labelID, ok := labelMap[o.result.Category]; ok && tb.evolution != nil {
+			if err := tb.evolution.HandleLabel(o.ch.JID, labelID, "add"); err != nil {
+				slog.Warn("label assign failed", "jid", o.ch.JID, "error", err)
+			} else {
+				labelSuffix = " 🏷"
+			}
+		}
+		sb.WriteString(fmt.Sprintf("  %s → %s%s\n", o.ch.PushName, o.result.Category, labelSuffix))
 	}
 
 	if classified == 0 {
@@ -1003,6 +1022,105 @@ func (tb *TelegramBot) cmdCatStats(ctx context.Context, b *tgbot.Bot, msg *model
 		sb.WriteString(fmt.Sprintf("  %s: %d\n", cat, count))
 	}
 	tb.reply(ctx, b, msg.Chat.ID, sb.String())
+}
+
+func (tb *TelegramBot) cmdLabels(ctx context.Context, b *tgbot.Bot, msg *models.Message) {
+	if tb.evolution == nil {
+		tb.reply(ctx, b, msg.Chat.ID, "Evolution client not configured.")
+		return
+	}
+	labels, err := tb.evolution.FetchLabels()
+	if err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error fetching labels: %v", err))
+		return
+	}
+	mapped, _ := tb.state.AllLabelMaps()
+
+	var sb strings.Builder
+	sb.WriteString("WhatsApp labels:\n\n")
+	for _, l := range labels {
+		name := l.Name
+		if name == "" {
+			name = "(unnamed)"
+		}
+		mappedCat := ""
+		for cat, id := range mapped {
+			if id == l.ID {
+				mappedCat = " → " + cat
+			}
+		}
+		sb.WriteString(fmt.Sprintf("  ID %-4s %s%s\n", l.ID, name, mappedCat))
+	}
+	sb.WriteString("\nUse /maplabel <category> <label-id> to map.")
+	tb.reply(ctx, b, msg.Chat.ID, sb.String())
+}
+
+func (tb *TelegramBot) cmdMapLabel(ctx context.Context, b *tgbot.Bot, msg *models.Message, args []string) {
+	if tb.state == nil {
+		tb.reply(ctx, b, msg.Chat.ID, "Requires database.")
+		return
+	}
+	if len(args) != 2 {
+		tb.reply(ctx, b, msg.Chat.ID, "Usage: /maplabel <category> <label-id>\nExample: /maplabel personal 3")
+		return
+	}
+	category := strings.ToLower(args[0])
+	labelID := args[1]
+	if !state.ValidCategories[category] {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Unknown category %q. Valid: personal, family, business, service, commerce, government, spam, unknown", category))
+		return
+	}
+	if err := tb.state.SetLabelMap(category, labelID); err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error: %v", err))
+		return
+	}
+	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Mapped: %s → label ID %s\nRun /synclabels to apply to all categorised contacts.", category, labelID))
+}
+
+func (tb *TelegramBot) cmdSyncLabels(ctx context.Context, b *tgbot.Bot, msg *models.Message) {
+	if tb.state == nil || tb.evolution == nil {
+		tb.reply(ctx, b, msg.Chat.ID, "Requires database and Evolution client.")
+		return
+	}
+
+	labelMap, err := tb.state.AllLabelMaps()
+	if err != nil || len(labelMap) == 0 {
+		tb.reply(ctx, b, msg.Chat.ID, "No label mappings configured. Use /maplabel first.")
+		return
+	}
+
+	contacts, err := tb.state.ListCategorised()
+	if err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error: %v", err))
+		return
+	}
+
+	if len(contacts) == 0 {
+		tb.reply(ctx, b, msg.Chat.ID, "No categorised contacts found. Run /bootstrap first.")
+		return
+	}
+
+	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Syncing labels for %d contacts...", len(contacts)))
+
+	var applied, skipped, failed int
+	for _, c := range contacts {
+		labelID, ok := labelMap[c.Category]
+		if !ok {
+			skipped++
+			continue
+		}
+		if err := tb.evolution.HandleLabel(c.JID, labelID, "add"); err != nil {
+			slog.Warn("label sync failed", "jid", c.JID, "category", c.Category, "error", err)
+			failed++
+			continue
+		}
+		applied++
+	}
+
+	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf(
+		"Label sync done.\nApplied: %d\nSkipped (no mapping): %d\nFailed: %d",
+		applied, skipped, failed,
+	))
 }
 
 func (tb *TelegramBot) resolveInput(input string) (string, string, error) {
