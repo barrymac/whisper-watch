@@ -1127,56 +1127,52 @@ func (tb *TelegramBot) cmdSyncLabels(ctx context.Context, b *tgbot.Bot, msg *mod
 }
 
 func (tb *TelegramBot) cmdDetectLabels(ctx context.Context, b *tgbot.Bot, msg *models.Message) {
-	if tb.store == nil {
+	if tb.state == nil {
 		tb.reply(ctx, b, msg.Chat.ID, "Requires database.")
 		return
 	}
 
-	rows, err := tb.store.DB().Query(`
-		SELECT c."remoteJid", COALESCE(c."name", ''), c.labels
-		FROM "Chat" c
-		WHERE c.labels IS NOT NULL
-		  AND c.labels::text != 'null'
-		  AND c.labels::text != '[]'
-		  AND c.labels::text != '{}'
-		  AND c."remoteJid" NOT LIKE '%@g.us'
-		ORDER BY c."updatedAt" DESC
-		LIMIT 50`)
+	entries, err := tb.state.ContactsWithLabels()
 	if err != nil {
 		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error: %v", err))
 		return
 	}
-	defer rows.Close()
-
-	type entry struct {
-		jid, name, labels string
-	}
-	var entries []entry
-	for rows.Next() {
-		var e entry
-		if err := rows.Scan(&e.jid, &e.name, &e.labels); err != nil {
-			continue
-		}
-		entries = append(entries, e)
-	}
 
 	if len(entries) == 0 {
 		tb.reply(ctx, b, msg.Chat.ID,
-			"No contacts with labels found yet.\n\n"+
-				"Assign a contact to a list in WhatsApp, wait a few seconds, then run /detectlabels again.")
+			"No label associations seen yet.\n\n"+
+				"Assign a contact to a list in WhatsApp — the bot will catch the event and record it here.\n"+
+				"Then run /detectlabels again.")
 		return
 	}
 
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Contacts with labels (%d):\n\n", len(entries)))
+	byLabel := make(map[string][]string)
+	labelNames := make(map[string]string)
 	for _, e := range entries {
-		name := e.name
-		if name == "" {
-			name = tb.store.ResolveName(e.jid)
+		name := e.JID
+		if tb.store != nil {
+			name = tb.store.ResolveName(e.JID)
 		}
-		sb.WriteString(fmt.Sprintf("  %s\n    labels: %s\n", name, e.labels))
+		byLabel[e.LabelID] = append(byLabel[e.LabelID], name)
+		if e.LabelName != "" {
+			labelNames[e.LabelID] = e.LabelName
+		}
 	}
-	sb.WriteString("\nUse /maplabel <category> <label-id> to map.")
+
+	var sb strings.Builder
+	sb.WriteString("Label associations detected:\n\n")
+	for labelID, names := range byLabel {
+		displayName := labelNames[labelID]
+		if displayName == "" {
+			displayName = "(unnamed)"
+		}
+		sb.WriteString(fmt.Sprintf("Label ID %s — %s:\n", labelID, displayName))
+		for _, n := range names {
+			sb.WriteString(fmt.Sprintf("  • %s\n", n))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("Use /maplabel <category> <label-id> to map.")
 	tb.reply(ctx, b, msg.Chat.ID, sb.String())
 }
 

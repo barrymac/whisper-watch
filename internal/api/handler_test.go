@@ -14,7 +14,7 @@ import (
 
 func newTestHandler(f *filters.Filters) *Handler {
 	w := whisper.NewClient("http://fake-speaches:8000", "tiny", "pt")
-	return NewHandler(w, nil, nil, nil, f, "5500000000000")
+	return NewHandler(w, nil, nil, nil, f, nil, "5500000000000")
 }
 
 func TestHealthz(t *testing.T) {

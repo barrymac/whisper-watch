@@ -2,6 +2,18 @@ package evolution
 
 import "encoding/json"
 
+type LabelAssociationData struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Color int    `json:"color"`
+	Type  string `json:"type"`
+}
+
+type LabelAssociationEvent struct {
+	Contact string               `json:"contact"`
+	Label   LabelAssociationData `json:"label"`
+}
+
 type WebhookPayload struct {
 	Event    string          `json:"event"`
 	Instance string          `json:"instance"`

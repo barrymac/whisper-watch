@@ -15,6 +15,7 @@ import (
 	"github.com/barrymac/whisper-watch/internal/filters"
 	"github.com/barrymac/whisper-watch/internal/metrics"
 	"github.com/barrymac/whisper-watch/internal/ollama"
+	"github.com/barrymac/whisper-watch/internal/state"
 	"github.com/barrymac/whisper-watch/internal/whisper"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -25,6 +26,7 @@ type Handler struct {
 	evolution  *evolution.Client
 	ollama     *ollama.Client
 	filters    *filters.Filters
+	state      *state.Store
 	ownerPhone string
 	mux        *http.ServeMux
 }
@@ -38,13 +40,14 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-func NewHandler(whisperClient *whisper.Client, telegramBot *bot.TelegramBot, evolutionClient *evolution.Client, ollamaClient *ollama.Client, f *filters.Filters, ownerPhone string) *Handler {
+func NewHandler(whisperClient *whisper.Client, telegramBot *bot.TelegramBot, evolutionClient *evolution.Client, ollamaClient *ollama.Client, f *filters.Filters, stateStore *state.Store, ownerPhone string) *Handler {
 	h := &Handler{
 		whisper:    whisperClient,
 		bot:        telegramBot,
 		evolution:  evolutionClient,
 		ollama:     ollamaClient,
 		filters:    f,
+		state:      stateStore,
 		ownerPhone: ownerPhone,
 		mux:        http.NewServeMux(),
 	}
@@ -129,7 +132,22 @@ func (h *Handler) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if payload.Event != "messages.upsert" {
+	switch payload.Event {
+	case "labels.association":
+		if h.state != nil {
+			var ev evolution.LabelAssociationEvent
+			if err := json.Unmarshal(payload.Data, &ev); err == nil && ev.Contact != "" {
+				if err := h.state.SetContactLabel(ev.Contact, ev.Label.ID, ev.Label.Name); err != nil {
+					slog.Warn("failed to store label association", "jid", ev.Contact, "labelId", ev.Label.ID, "error", err)
+				} else {
+					slog.Info("label associated", "jid", ev.Contact, "labelId", ev.Label.ID, "labelName", ev.Label.Name)
+				}
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	case "messages.upsert":
+	default:
 		w.WriteHeader(http.StatusOK)
 		return
 	}

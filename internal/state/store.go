@@ -31,6 +31,14 @@ CREATE TABLE IF NOT EXISTS ww_label_map (
 	category TEXT PRIMARY KEY,
 	label_id TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS ww_contact_labels (
+	jid      TEXT NOT NULL,
+	label_id TEXT NOT NULL,
+	label_name TEXT NOT NULL DEFAULT '',
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	PRIMARY KEY (jid, label_id)
+);
 `
 
 type Settings struct {
@@ -262,6 +270,41 @@ func (s *Store) ListUncategorised() ([]string, error) {
 		jids = append(jids, jid)
 	}
 	return jids, rows.Err()
+}
+
+func (s *Store) SetContactLabel(jid, labelID, labelName string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO ww_contact_labels (jid, label_id, label_name, updated_at)
+		 VALUES ($1, $2, $3, now())
+		 ON CONFLICT (jid, label_id) DO UPDATE SET label_name = EXCLUDED.label_name, updated_at = now()`,
+		jid, labelID, labelName,
+	)
+	return err
+}
+
+type ContactLabelEntry struct {
+	JID       string
+	LabelID   string
+	LabelName string
+}
+
+func (s *Store) ContactsWithLabels() ([]ContactLabelEntry, error) {
+	rows, err := s.db.Query(
+		`SELECT jid, label_id, label_name FROM ww_contact_labels ORDER BY label_id, jid`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ContactLabelEntry
+	for rows.Next() {
+		var e ContactLabelEntry
+		if err := rows.Scan(&e.JID, &e.LabelID, &e.LabelName); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) SetLabelMap(category, labelID string) error {

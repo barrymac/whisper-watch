@@ -112,7 +112,7 @@ func main() {
 	go telegramBot.Start(ctx)
 	slog.Info("telegram bot started")
 
-	handler := api.NewHandler(whisperClient, telegramBot, evolutionClient, ollamaClient, f, cfg.OwnerPhone)
+	handler := api.NewHandler(whisperClient, telegramBot, evolutionClient, ollamaClient, f, stateStore, cfg.OwnerPhone)
 
 	server := &http.Server{
 		Addr:    cfg.ListenAddr,
