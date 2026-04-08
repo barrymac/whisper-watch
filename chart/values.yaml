@@ -14,7 +14,7 @@ clusterDomain: cluster.local
 # =============================================================================
 speaches:
   image: ghcr.io/speaches-ai/speaches:0.8.3-cuda-12.4.1
-  model: large-v3
+  model: Systran/faster-whisper-large-v3
   computeType: float16
   language: pt
 
