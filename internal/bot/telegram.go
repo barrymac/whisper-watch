@@ -867,17 +867,18 @@ func (tb *TelegramBot) cmdBootstrap(ctx context.Context, b *tgbot.Bot, msg *mode
 		return
 	}
 
-	count := 10
+	count := 0
 	if len(args) > 0 {
 		if n, err := strconv.Atoi(args[0]); err == nil && n > 0 {
 			count = n
 		}
 	}
-	if count > 50 {
-		count = 50
-	}
 
-	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Classifying up to %d contacts...", count))
+	countMsg := fmt.Sprintf("up to %d", count)
+	if count == 0 {
+		countMsg = "all"
+	}
+	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Classifying %s contacts...", countMsg))
 
 	jids, err := tb.state.ListUncategorised()
 	if err != nil {
@@ -890,7 +891,7 @@ func (tb *TelegramBot) cmdBootstrap(ctx context.Context, b *tgbot.Bot, msg *mode
 		return
 	}
 
-	if len(jids) > count {
+	if count > 0 && len(jids) > count {
 		jids = jids[:count]
 	}
 

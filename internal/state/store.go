@@ -241,8 +241,7 @@ func (s *Store) ListUncategorised() ([]string, error) {
 		 WHERE c."pushName" IS NOT NULL AND c."pushName" != ''
 		   AND (wc.jid IS NULL OR wc.category = 'unknown')
 		 AND c."remoteJid" NOT LIKE '%@g.us'
-		 ORDER BY c."updatedAt" DESC
-		 LIMIT 500`,
+		 ORDER BY c."updatedAt" DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing uncategorised: %w", err)
