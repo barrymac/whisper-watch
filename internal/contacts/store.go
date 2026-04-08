@@ -246,38 +246,68 @@ type ContactWithHistory struct {
 	History  string
 }
 
-func (s *Store) ContactsWithHistory(jids []string, msgLimit int) ([]ContactWithHistory, error) {
-	var results []ContactWithHistory
-	for _, jid := range jids {
-		msgs, err := s.MessageHistory(jid, msgLimit)
-		if err != nil {
-			return nil, fmt.Errorf("history for %s: %w", jid, err)
-		}
-		if len(msgs) < 3 {
-			continue
-		}
+func (s *Store) UncategorisedWithHistory(msgLimit, minMsgs int) ([]ContactWithHistory, error) {
+	q := `
+		WITH ranked AS (
+			SELECT
+				key->>'remoteJid'                                        AS jid,
+				COALESCE("pushName", '')                                 AS push_name,
+				"messageType",
+				COALESCE(message->>'conversation', message->>'text', '') AS text,
+				COALESCE((key->>'fromMe')::boolean, false)               AS from_me,
+				"messageTimestamp",
+				ROW_NUMBER() OVER (
+					PARTITION BY key->>'remoteJid'
+					ORDER BY "messageTimestamp" DESC
+				) AS rn,
+				COUNT(*) OVER (PARTITION BY key->>'remoteJid')           AS msg_count
+			FROM "Message"
+			WHERE "instanceId" = $1
+			  AND key->>'remoteJid' NOT LIKE '%@g.us'
+		)
+		SELECT r.jid, r.push_name, r."messageType", r.text, r.from_me
+		FROM ranked r
+		LEFT JOIN ww_contacts wc ON wc.jid = r.jid
+		WHERE r.rn <= $2
+		  AND r.msg_count >= $3
+		  AND (wc.jid IS NULL OR wc.category = 'unknown')
+		ORDER BY r.jid, r."messageTimestamp" ASC`
 
-		name := s.ResolveName(jid)
+	rows, err := s.db.Query(q, s.instanceID, msgLimit, minMsgs)
+	if err != nil {
+		return nil, fmt.Errorf("uncategorised with history: %w", err)
+	}
+	defer rows.Close()
 
-		var sb strings.Builder
-		for i := len(msgs) - 1; i >= 0; i-- {
-			m := msgs[i]
-			dir := "[them]"
-			if m.FromMe {
-				dir = "[you]"
-			}
-			content := m.TextPreview
-			if content == "" {
-				content = fmt.Sprintf("[%s]", m.MessageType)
-			}
-			sb.WriteString(fmt.Sprintf("%s %s\n", dir, content))
+	byJID := make(map[string]*ContactWithHistory)
+	var order []string
+	for rows.Next() {
+		var jid, pushName, msgType, text string
+		var fromMe bool
+		if err := rows.Scan(&jid, &pushName, &msgType, &text, &fromMe); err != nil {
+			return nil, fmt.Errorf("scanning history row: %w", err)
 		}
+		if _, ok := byJID[jid]; !ok {
+			byJID[jid] = &ContactWithHistory{JID: jid, PushName: pushName}
+			order = append(order, jid)
+		}
+		dir := "[them]"
+		if fromMe {
+			dir = "[you]"
+		}
+		content := text
+		if content == "" {
+			content = fmt.Sprintf("[%s]", msgType)
+		}
+		byJID[jid].History += fmt.Sprintf("%s %s\n", dir, content)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating history: %w", err)
+	}
 
-		results = append(results, ContactWithHistory{
-			JID:      jid,
-			PushName: name,
-			History:  sb.String(),
-		})
+	results := make([]ContactWithHistory, 0, len(order))
+	for _, jid := range order {
+		results = append(results, *byJID[jid])
 	}
 	return results, nil
 }

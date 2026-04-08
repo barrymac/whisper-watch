@@ -880,30 +880,19 @@ func (tb *TelegramBot) cmdBootstrap(ctx context.Context, b *tgbot.Bot, msg *mode
 	}
 	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Classifying %s contacts...", countMsg))
 
-	jids, err := tb.state.ListUncategorised()
+	withHistory, err := tb.store.UncategorisedWithHistory(10, 3)
 	if err != nil {
 		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error: %v", err))
 		return
 	}
 
-	if len(jids) == 0 {
-		tb.reply(ctx, b, msg.Chat.ID, "No uncategorised contacts found.")
-		return
-	}
-
-	if count > 0 && len(jids) > count {
-		jids = jids[:count]
-	}
-
-	withHistory, err := tb.store.ContactsWithHistory(jids, 10)
-	if err != nil {
-		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error loading history: %v", err))
-		return
-	}
-
 	if len(withHistory) == 0 {
-		tb.reply(ctx, b, msg.Chat.ID, "No contacts with enough message history (need 3+).")
+		tb.reply(ctx, b, msg.Chat.ID, "No contacts with message history to classify.")
 		return
+	}
+
+	if count > 0 && len(withHistory) > count {
+		withHistory = withHistory[:count]
 	}
 
 	tb.ollama.SetModel(tb.filters.OllamaModel())
