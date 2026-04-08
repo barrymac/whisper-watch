@@ -1,0 +1,120 @@
+namespace: whisper-watch
+
+# StorageClass for PVCs (whisper model cache, evolution sessions)
+# Examples: csi-rbd-sc, longhorn, local-path, standard
+storageClass: standard
+
+# Cluster DNS domain — used to build internal service URLs
+# Examples: cluster.local, k8s.example.com
+clusterDomain: cluster.local
+
+# =============================================================================
+# speaches — GPU-accelerated Whisper inference (OpenAI-compatible API)
+# https://github.com/speaches-ai/speaches
+# =============================================================================
+speaches:
+  image: ghcr.io/speaches-ai/speaches:0.8.3-cuda-12.4.1
+  model: large-v3
+  computeType: float16
+  language: pt
+
+  storage:
+    modelCache: 10Gi
+
+  resources:
+    requests:
+      memory: 4Gi
+      cpu: "1"
+      nvidia.com/gpu: "1"
+    limits:
+      memory: 8Gi
+      nvidia.com/gpu: "1"
+
+# =============================================================================
+# whisper-bot — Go service: REST API + Telegram bot + WhatsApp webhook handler
+# =============================================================================
+whisperBot:
+  image: your-registry/whisper-bot
+  imageTag: latest
+
+  # Telegram + owner phone — secret must be pre-created:
+  #   kubectl create secret generic whisper-bot -n whisper-watch \
+  #     --from-literal=TELEGRAM_BOT_TOKEN=<token_from_botfather> \
+  #     --from-literal=TELEGRAM_CHAT_ID=<your_telegram_numeric_id> \
+  #     --from-literal=OWNER_PHONE=<whatsapp_number_e164_no_plus>
+  existingSecret: whisper-bot
+
+  evolutionInstance: default
+
+  # Evolution DB instance ID — found via GET /instance/fetchInstances after connecting
+  # Set this after your first WhatsApp QR scan:
+  #   kubectl set ... or helm upgrade --set whisperBot.evolutionInstanceId=<uuid>
+  evolutionInstanceId: ""
+
+  # Ollama for LLM translation + reply drafting (optional)
+  # Leave blank to use Whisper's built-in translation instead
+  ollamaURL: ""
+  ollamaModel: qwen2.5:7b
+
+  muteGroups: "true"
+  mutedJIDs: ""
+
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 500m
+
+# =============================================================================
+# evolution-api — WhatsApp bridge via WhatsApp Web protocol (Baileys)
+# https://github.com/EvolutionAPI/evolution-api
+# Expose via MetalLB or NodePort for LAN access (QR scan + management)
+# =============================================================================
+evolutionApi:
+  image: your-registry/evolution-api:2.3.7
+
+  # External PostgreSQL — create the DB before deploying:
+  #   kubectl exec -n <pg-namespace> deploy/postgresql -- \
+  #     psql -U <admin> -c "CREATE DATABASE evolution;"
+  #   kubectl exec -n <pg-namespace> deploy/postgresql -- \
+  #     psql -U <admin> -c "CREATE USER evolution WITH PASSWORD '<pw>';"
+  #   kubectl exec -n <pg-namespace> deploy/postgresql -- \
+  #     psql -U <admin> -c "GRANT ALL PRIVILEGES ON DATABASE evolution TO evolution;"
+
+  # Secret must be pre-created (all three keys required):
+  #   kubectl create secret generic evolution-api -n whisper-watch \
+  #     --from-literal=AUTHENTICATION_API_KEY=$(openssl rand -hex 32) \
+  #     --from-literal=DATABASE_CONNECTION_URI=postgresql://evolution:<pw>@<host>:5432/evolution \
+  #     --from-literal=CACHE_REDIS_URI=redis://<host>:6379/0
+  existingSecret: evolution-api
+
+  phoneVersion: "2.3000.1026080446"
+
+  storage:
+    sessions: 2Gi
+
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+# =============================================================================
+# redis — Lightweight cache for Evolution API session management
+# Set enabled: false and point CACHE_REDIS_URI at an external Redis instead
+# =============================================================================
+redis:
+  enabled: true
+  image: redis:7-alpine
+
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 128Mi
+      cpu: 200m

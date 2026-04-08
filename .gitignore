@@ -1,0 +1,5 @@
+chart/values.local.yaml
+config.ini
+*.local.yaml
+Makefile.local
+.agents

@@ -1,0 +1,130 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: evolution-data
+  namespace: {{ .Values.namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.evolutionApi.storage.sessions }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evolution-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: evolution-api
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: evolution-api
+  template:
+    metadata:
+      labels:
+        app: evolution-api
+    spec:
+      containers:
+        - name: evolution-api
+          image: {{ .Values.evolutionApi.image }}
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: SERVER_URL
+              value: http://evolution-api.{{ .Values.namespace }}.svc.{{ .Values.clusterDomain }}:8080
+            - name: AUTHENTICATION_TYPE
+              value: apikey
+            - name: AUTHENTICATION_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.evolutionApi.existingSecret }}
+                  key: AUTHENTICATION_API_KEY
+            - name: DATABASE_ENABLED
+              value: "true"
+            - name: DATABASE_PROVIDER
+              value: postgresql
+            - name: DATABASE_CONNECTION_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.evolutionApi.existingSecret }}
+                  key: DATABASE_CONNECTION_URI
+            - name: DATABASE_SAVE_DATA_INSTANCE
+              value: "true"
+            - name: DATABASE_SAVE_DATA_NEW_MESSAGE
+              value: "true"
+            - name: DATABASE_SAVE_MESSAGE_UPDATE
+              value: "true"
+            - name: DATABASE_SAVE_DATA_CONTACTS
+              value: "true"
+            - name: DATABASE_SAVE_DATA_CHATS
+              value: "true"
+            - name: CACHE_REDIS_ENABLED
+              value: "true"
+            - name: CACHE_REDIS_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.evolutionApi.existingSecret }}
+                  key: CACHE_REDIS_URI
+            - name: CACHE_REDIS_PREFIX_KEY
+              value: evolution
+            - name: CACHE_REDIS_SAVE_INSTANCES
+              value: "true"
+            - name: CACHE_LOCAL_ENABLED
+              value: "false"
+            - name: QRCODE_LIMIT
+              value: "30"
+            - name: WEBHOOK_GLOBAL_ENABLED
+              value: "false"
+            - name: CONFIG_SESSION_PHONE_CLIENT
+              value: whisper-watch
+            - name: CONFIG_SESSION_PHONE_NAME
+              value: Chrome
+            - name: CONFIG_SESSION_PHONE_VERSION
+              value: {{ .Values.evolutionApi.phoneVersion | quote }}
+          resources:
+            {{- toYaml .Values.evolutionApi.resources | nindent 12 }}
+          volumeMounts:
+            - name: evolution-data
+              mountPath: /evolution/instances
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: evolution-data
+          persistentVolumeClaim:
+            claimName: evolution-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: evolution-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: evolution-api
+spec:
+  selector:
+    app: evolution-api
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
+  type: LoadBalancer

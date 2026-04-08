@@ -1,0 +1,8 @@
+[Local]
+WatchDirectory = /home/user/Downloads/
+ProcessedDirectory = /home/user/Downloads/whisper/translations
+DownloadDirectory = /home/user/Downloads/whisper/downloads
+AllowedExtensions = ogg,mp3
+
+[Service]
+URL = http://whisper-bot.whisper-watch.svc.cluster.local:8080

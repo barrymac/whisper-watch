@@ -1,0 +1,12 @@
+clusterDomain: cluster.local
+storageClass: standard
+
+whisperBot:
+  image: your-registry/whisper-bot
+  evolutionInstance: default
+  evolutionInstanceId: ""
+  ollamaURL: http://ollama.your-namespace.svc.cluster.local:11434
+  ollamaModel: qwen2.5:7b
+
+evolutionApi:
+  image: your-registry/evolution-api:2.3.7

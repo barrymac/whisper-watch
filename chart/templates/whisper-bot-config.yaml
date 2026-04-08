@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: whisper-bot-filters
+  namespace: {{ .Values.namespace }}
+data:
+  MUTE_GROUPS: {{ .Values.whisperBot.muteGroups | quote }}
+  MUTED_JIDS: {{ .Values.whisperBot.mutedJIDs | quote }}

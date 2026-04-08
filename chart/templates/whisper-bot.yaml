@@ -1,0 +1,104 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whisper-bot
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: whisper-bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: whisper-bot
+  template:
+    metadata:
+      labels:
+        app: whisper-bot
+    spec:
+      containers:
+        - name: whisper-bot
+          image: {{ .Values.whisperBot.image }}:{{ .Values.whisperBot.imageTag }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: whisper-bot-filters
+          env:
+            - name: SPEACHES_URL
+              value: http://speaches.{{ .Values.namespace }}.svc.{{ .Values.clusterDomain }}:8000
+            - name: LISTEN_ADDR
+              value: ":8080"
+            - name: WHISPER_MODEL
+              value: {{ .Values.speaches.model }}
+            - name: WHISPER_LANGUAGE
+              value: {{ .Values.speaches.language }}
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.whisperBot.existingSecret }}
+                  key: TELEGRAM_BOT_TOKEN
+            - name: TELEGRAM_CHAT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.whisperBot.existingSecret }}
+                  key: TELEGRAM_CHAT_ID
+            - name: OWNER_PHONE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.whisperBot.existingSecret }}
+                  key: OWNER_PHONE
+            - name: EVOLUTION_API_URL
+              value: http://evolution-api.{{ .Values.namespace }}.svc.{{ .Values.clusterDomain }}:8080
+            - name: EVOLUTION_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.evolutionApi.existingSecret }}
+                  key: AUTHENTICATION_API_KEY
+            - name: EVOLUTION_INSTANCE
+              value: {{ .Values.whisperBot.evolutionInstance }}
+            - name: OLLAMA_URL
+              value: {{ .Values.whisperBot.ollamaURL }}
+            - name: OLLAMA_MODEL
+              value: {{ .Values.whisperBot.ollamaModel }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.evolutionApi.existingSecret }}
+                  key: DATABASE_CONNECTION_URI
+            - name: EVOLUTION_INSTANCE_ID
+              value: {{ .Values.whisperBot.evolutionInstanceId | default "" }}
+          resources:
+            {{- toYaml .Values.whisperBot.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: whisper-bot
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: whisper-bot
+spec:
+  selector:
+    app: whisper-bot
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
+  type: ClusterIP

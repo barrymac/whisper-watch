@@ -1,0 +1,6 @@
+apiVersion: v2
+name: whisper-watch
+description: Automated audio transcription and translation — Whisper on GPU, Telegram and WhatsApp delivery
+type: application
+version: 0.1.0
+appVersion: "1.0"
