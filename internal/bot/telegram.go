@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/barrymac/whisper-watch/internal/contacts"
@@ -22,25 +23,30 @@ import (
 )
 
 type TelegramBot struct {
-	bot       *tgbot.Bot
-	whisper   *whisper.Client
-	chatID    int64
-	filters   *filters.Filters
-	store     *contacts.Store
-	evolution *evolution.Client
-	ollama    *ollama.Client
-	state     *state.Store
+	bot               *tgbot.Bot
+	whisper           *whisper.Client
+	chatID            int64
+	filters           *filters.Filters
+	store             *contacts.Store
+	evolution         *evolution.Client
+	ollama            *ollama.Client
+	state             *state.Store
+	ollamaConcurrency int
 }
 
-func New(token string, chatID int64, whisperClient *whisper.Client, f *filters.Filters, store *contacts.Store, evo *evolution.Client, ollamaClient *ollama.Client, stateStore *state.Store) (*TelegramBot, error) {
+func New(token string, chatID int64, whisperClient *whisper.Client, f *filters.Filters, store *contacts.Store, evo *evolution.Client, ollamaClient *ollama.Client, stateStore *state.Store, ollamaConcurrency int) (*TelegramBot, error) {
+	if ollamaConcurrency < 1 {
+		ollamaConcurrency = 1
+	}
 	tb := &TelegramBot{
-		whisper:   whisperClient,
-		chatID:    chatID,
-		filters:   f,
-		store:     store,
-		evolution: evo,
-		ollama:    ollamaClient,
-		state:     stateStore,
+		whisper:           whisperClient,
+		chatID:            chatID,
+		filters:           f,
+		store:             store,
+		evolution:         evo,
+		ollama:            ollamaClient,
+		state:             stateStore,
+		ollamaConcurrency: ollamaConcurrency,
 	}
 
 	opts := []tgbot.Option{
@@ -182,6 +188,18 @@ func (tb *TelegramBot) handleCommand(ctx context.Context, b *tgbot.Bot, msg *mod
 		tb.cmdModel(ctx, b, msg, args)
 	case "/models":
 		tb.cmdModels(ctx, b, msg)
+	case "/category":
+		tb.cmdCategory(ctx, b, msg, args)
+	case "/categorise", "/categorize":
+		tb.cmdCategorise(ctx, b, msg, args)
+	case "/uncategorised", "/uncategorized":
+		tb.cmdUncategorised(ctx, b, msg)
+	case "/bootstrap":
+		tb.cmdBootstrap(ctx, b, msg, args)
+	case "/personal", "/family", "/business", "/service", "/commerce", "/government", "/spam":
+		tb.cmdListCategory(ctx, b, msg, strings.TrimPrefix(cmd, "/"))
+	case "/catstats":
+		tb.cmdCatStats(ctx, b, msg)
 	default:
 		tb.reply(ctx, b, msg.Chat.ID, "Unknown command. /help")
 	}
@@ -206,6 +224,15 @@ func (tb *TelegramBot) cmdHelp(ctx context.Context, b *tgbot.Bot, msg *models.Me
 		"  /groups — list WhatsApp groups\n"+
 		"  /group <name> — group details\n"+
 		"  /who <jid> — resolve JID\n"+
+		"\n"+
+		"Categories:\n"+
+		"  /category <name> — view contact category\n"+
+		"  /categorise <name> <cat> — set manually\n"+
+		"  /uncategorised — list unclassified\n"+
+		"  /bootstrap [n] — LLM auto-classify\n"+
+		"  /catstats — category breakdown\n"+
+		"  /<cat> — list (personal/family/business/\n"+
+		"    service/commerce/government/spam)\n"+
 		"\n"+
 		"History:\n"+
 		"  /history <name> [n] — messages from contact\n"+
@@ -243,6 +270,17 @@ func (tb *TelegramBot) cmdStatus(ctx context.Context, b *tgbot.Bot, msg *models.
 		contactCount, msgCount, err := tb.store.ContactStats()
 		if err == nil {
 			lines = append(lines, fmt.Sprintf("Contacts: %d | Messages: %d", contactCount, msgCount))
+		}
+	}
+
+	if tb.state != nil {
+		stats, err := tb.state.CategoryStats()
+		if err == nil && len(stats) > 0 {
+			total := 0
+			for _, c := range stats {
+				total += c
+			}
+			lines = append(lines, fmt.Sprintf("Categorised: %d", total))
 		}
 	}
 
@@ -711,6 +749,269 @@ func (tb *TelegramBot) cmdModels(ctx context.Context, b *tgbot.Bot, msg *models.
 		sb.WriteString(fmt.Sprintf("%s%s (%.1f GB)\n", marker, m.Name, sizeGB))
 	}
 	sb.WriteString(fmt.Sprintf("\nUse /model <name> to switch."))
+	tb.reply(ctx, b, msg.Chat.ID, sb.String())
+}
+
+func (tb *TelegramBot) cmdCategory(ctx context.Context, b *tgbot.Bot, msg *models.Message, args []string) {
+	if tb.state == nil || tb.store == nil {
+		tb.reply(ctx, b, msg.Chat.ID, "Requires database.")
+		return
+	}
+	if len(args) == 0 {
+		tb.reply(ctx, b, msg.Chat.ID, "Usage: /category <name|jid>")
+		return
+	}
+
+	input := strings.Join(args, " ")
+	jid, name, err := tb.resolveInput(input)
+	if err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Not found: %v", err))
+		return
+	}
+
+	cat, err := tb.state.GetCategory(jid)
+	if err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error: %v", err))
+		return
+	}
+
+	label := name
+	if label == "" {
+		label = jid
+	}
+	if cat == nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("%s: uncategorised", label))
+		return
+	}
+
+	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("%s: %s\nReason: %s\nSource: %s\nUpdated: %s",
+		label, cat.Category, cat.CategoryReason, cat.CategorySource,
+		cat.UpdatedAt.Format("2006-01-02 15:04")))
+}
+
+func (tb *TelegramBot) cmdCategorise(ctx context.Context, b *tgbot.Bot, msg *models.Message, args []string) {
+	if tb.state == nil || tb.store == nil {
+		tb.reply(ctx, b, msg.Chat.ID, "Requires database.")
+		return
+	}
+	if len(args) < 2 {
+		tb.reply(ctx, b, msg.Chat.ID, "Usage: /categorise <name|jid> <category>")
+		return
+	}
+
+	category := strings.ToLower(args[len(args)-1])
+	if !state.ValidCategories[category] {
+		cats := make([]string, 0, len(state.ValidCategories))
+		for c := range state.ValidCategories {
+			cats = append(cats, c)
+		}
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Invalid category. Valid: %s", strings.Join(cats, ", ")))
+		return
+	}
+
+	nameArgs := args[:len(args)-1]
+	input := strings.Join(nameArgs, " ")
+	jid, name, err := tb.resolveInput(input)
+	if err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Not found: %v", err))
+		return
+	}
+
+	if err := tb.state.SetCategory(jid, category, "manual override", "manual"); err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error: %v", err))
+		return
+	}
+
+	label := name
+	if label == "" {
+		label = jid
+	}
+	slog.Info("contact categorised manually", "jid", jid, "category", category)
+	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("%s → %s", label, category))
+}
+
+func (tb *TelegramBot) cmdUncategorised(ctx context.Context, b *tgbot.Bot, msg *models.Message) {
+	if tb.state == nil || tb.store == nil {
+		tb.reply(ctx, b, msg.Chat.ID, "Requires database.")
+		return
+	}
+
+	jids, err := tb.state.ListUncategorised()
+	if err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error: %v", err))
+		return
+	}
+
+	if len(jids) == 0 {
+		tb.reply(ctx, b, msg.Chat.ID, "All contacts categorised!")
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Uncategorised (%d):\n\n", len(jids)))
+	for _, jid := range jids {
+		name := tb.store.ResolveName(jid)
+		if name == jid {
+			sb.WriteString(fmt.Sprintf("  %s\n", jid))
+		} else {
+			sb.WriteString(fmt.Sprintf("  %s (%s)\n", name, jid))
+		}
+	}
+	sb.WriteString("\nUse /bootstrap to auto-classify or /categorise <name> <cat> for manual.")
+	tb.reply(ctx, b, msg.Chat.ID, sb.String())
+}
+
+func (tb *TelegramBot) cmdBootstrap(ctx context.Context, b *tgbot.Bot, msg *models.Message, args []string) {
+	if tb.state == nil || tb.store == nil || tb.ollama == nil {
+		tb.reply(ctx, b, msg.Chat.ID, "Requires database and LLM.")
+		return
+	}
+
+	count := 10
+	if len(args) > 0 {
+		if n, err := strconv.Atoi(args[0]); err == nil && n > 0 {
+			count = n
+		}
+	}
+	if count > 50 {
+		count = 50
+	}
+
+	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Classifying up to %d contacts...", count))
+
+	jids, err := tb.state.ListUncategorised()
+	if err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error: %v", err))
+		return
+	}
+
+	if len(jids) == 0 {
+		tb.reply(ctx, b, msg.Chat.ID, "No uncategorised contacts found.")
+		return
+	}
+
+	if len(jids) > count {
+		jids = jids[:count]
+	}
+
+	withHistory, err := tb.store.ContactsWithHistory(jids, 10)
+	if err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error loading history: %v", err))
+		return
+	}
+
+	if len(withHistory) == 0 {
+		tb.reply(ctx, b, msg.Chat.ID, "No contacts with enough message history (need 3+).")
+		return
+	}
+
+	tb.ollama.SetModel(tb.filters.OllamaModel())
+	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Classifying %d contacts (concurrency %d)...", len(withHistory), tb.ollamaConcurrency))
+
+	type classifyOutcome struct {
+		ch     contacts.ContactWithHistory
+		result ollama.ClassifyResult
+		err    error
+	}
+
+	sem := make(chan struct{}, tb.ollamaConcurrency)
+	outcomes := make([]classifyOutcome, len(withHistory))
+	var wg sync.WaitGroup
+
+	for i, ch := range withHistory {
+		wg.Add(1)
+		go func(idx int, contact contacts.ContactWithHistory) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			result, err := tb.ollama.Classify(contact.PushName, contact.History)
+			outcomes[idx] = classifyOutcome{ch: contact, result: result, err: err}
+		}(i, ch)
+	}
+	wg.Wait()
+
+	var classified int
+	var sb strings.Builder
+	for _, o := range outcomes {
+		if o.err != nil {
+			slog.Warn("classify failed", "jid", o.ch.JID, "error", o.err)
+			continue
+		}
+		if err := tb.state.SetCategory(o.ch.JID, o.result.Category, o.result.Reason, "bootstrap"); err != nil {
+			slog.Warn("save category failed", "jid", o.ch.JID, "error", err)
+			continue
+		}
+		classified++
+		sb.WriteString(fmt.Sprintf("  %s → %s\n", o.ch.PushName, o.result.Category))
+	}
+
+	if classified == 0 {
+		tb.reply(ctx, b, msg.Chat.ID, "No contacts could be classified.")
+		return
+	}
+
+	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Classified %d/%d:\n\n%s", classified, len(withHistory), sb.String()))
+}
+
+func (tb *TelegramBot) cmdListCategory(ctx context.Context, b *tgbot.Bot, msg *models.Message, category string) {
+	if tb.state == nil {
+		tb.reply(ctx, b, msg.Chat.ID, "Requires database.")
+		return
+	}
+
+	contacts, err := tb.state.ListByCategory(category)
+	if err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error: %v", err))
+		return
+	}
+
+	if len(contacts) == 0 {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("No contacts in category %q.", category))
+		return
+	}
+
+	var sb strings.Builder
+	title := strings.ToUpper(category[:1]) + category[1:]
+	sb.WriteString(fmt.Sprintf("%s (%d):\n\n", title, len(contacts)))
+	for _, c := range contacts {
+		name := c.JID
+		if tb.store != nil {
+			resolved := tb.store.ResolveName(c.JID)
+			if resolved != c.JID {
+				name = resolved
+			}
+		}
+		sb.WriteString(fmt.Sprintf("  %s\n    %s\n", name, c.CategoryReason))
+	}
+	tb.reply(ctx, b, msg.Chat.ID, sb.String())
+}
+
+func (tb *TelegramBot) cmdCatStats(ctx context.Context, b *tgbot.Bot, msg *models.Message) {
+	if tb.state == nil {
+		tb.reply(ctx, b, msg.Chat.ID, "Requires database.")
+		return
+	}
+
+	stats, err := tb.state.CategoryStats()
+	if err != nil {
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Error: %v", err))
+		return
+	}
+
+	if len(stats) == 0 {
+		tb.reply(ctx, b, msg.Chat.ID, "No contacts categorised yet. Try /bootstrap")
+		return
+	}
+
+	var sb strings.Builder
+	total := 0
+	for _, count := range stats {
+		total += count
+	}
+	sb.WriteString(fmt.Sprintf("Categories (%d total):\n\n", total))
+	for cat, count := range stats {
+		sb.WriteString(fmt.Sprintf("  %s: %d\n", cat, count))
+	}
 	tb.reply(ctx, b, msg.Chat.ID, sb.String())
 }
 

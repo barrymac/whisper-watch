@@ -58,6 +58,7 @@ whisperBot:
 
   muteGroups: "true"
   mutedJIDs: ""
+  ollamaConcurrency: 3
 
   resources:
     requests:

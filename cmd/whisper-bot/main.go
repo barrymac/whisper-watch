@@ -100,7 +100,7 @@ func main() {
 		"ollamaModel", loaded.OllamaModel,
 	)
 
-	telegramBot, err := bot.New(cfg.TelegramToken, cfg.TelegramChatID, whisperClient, f, contactStore, evolutionClient, ollamaClient, stateStore)
+	telegramBot, err := bot.New(cfg.TelegramToken, cfg.TelegramChatID, whisperClient, f, contactStore, evolutionClient, ollamaClient, stateStore, cfg.OllamaConcurrency)
 	if err != nil {
 		slog.Error("failed to create telegram bot", "error", err)
 		os.Exit(1)

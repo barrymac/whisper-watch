@@ -20,6 +20,7 @@ type Config struct {
 	OwnerPhone        string
 	OllamaURL         string
 	OllamaModel       string
+	OllamaConcurrency int
 	DatabaseURL       string
 	InstanceID        string
 	MuteGroups        bool
@@ -51,6 +52,7 @@ func Load() (*Config, error) {
 		OwnerPhone:        os.Getenv("OWNER_PHONE"),
 		OllamaURL:         envOrDefault("OLLAMA_URL", ""),
 		OllamaModel:       envOrDefault("OLLAMA_MODEL", "hf.co/HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive:Q8_0"),
+		OllamaConcurrency: envOrDefaultInt("OLLAMA_CONCURRENCY", 3),
 		DatabaseURL:       ensureNoSSL(os.Getenv("DATABASE_URL")),
 		InstanceID:        envOrDefault("EVOLUTION_INSTANCE_ID", ""),
 		MuteGroups:        os.Getenv("MUTE_GROUPS") == "true",
@@ -61,6 +63,15 @@ func Load() (*Config, error) {
 func envOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func envOrDefaultInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
 	}
 	return fallback
 }

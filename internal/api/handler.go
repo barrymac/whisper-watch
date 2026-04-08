@@ -8,12 +8,15 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/barrymac/whisper-watch/internal/bot"
-	"github.com/barrymac/whisper-watch/internal/filters"
 	"github.com/barrymac/whisper-watch/internal/evolution"
+	"github.com/barrymac/whisper-watch/internal/filters"
+	"github.com/barrymac/whisper-watch/internal/metrics"
 	"github.com/barrymac/whisper-watch/internal/ollama"
 	"github.com/barrymac/whisper-watch/internal/whisper"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Handler struct {
@@ -50,6 +53,7 @@ func NewHandler(whisperClient *whisper.Client, telegramBot *bot.TelegramBot, evo
 	h.mux.HandleFunc("POST /webhook/evolution", h.handleEvolutionWebhook)
 	h.mux.HandleFunc("GET /healthz", h.handleLiveness)
 	h.mux.HandleFunc("GET /readyz", h.handleReadiness)
+	h.mux.Handle("GET /metrics", promhttp.Handler())
 
 	return h
 }
@@ -144,6 +148,7 @@ func (h *Handler) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request)
 
 	if h.filters.IsMuted(msg.Key.RemoteJid) {
 		slog.Info("muted message", "jid", msg.Key.RemoteJid, "name", msg.PushName)
+		metrics.WebhookMessages.WithLabelValues("muted").Inc()
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -154,6 +159,11 @@ func (h *Handler) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request)
 		"type", msg.MessageType,
 	)
 
+	msgType := "text"
+	if msg.IsAudio() {
+		msgType = "audio"
+	}
+	metrics.WebhookMessages.WithLabelValues(msgType).Inc()
 	go h.processEvolutionMessage(msg)
 	w.WriteHeader(http.StatusOK)
 }
@@ -163,6 +173,8 @@ func (h *Handler) processEvolutionMessage(msg *evolution.MessageData) {
 		slog.Warn("evolution client not configured, skipping message")
 		return
 	}
+	start := time.Now()
+	defer func() { metrics.WebhookProcessDuration.Observe(time.Since(start).Seconds()) }()
 
 	contact := msg.PushName
 	if contact == "" {
@@ -177,7 +189,9 @@ func (h *Handler) processEvolutionMessage(msg *evolution.MessageData) {
 			return
 		}
 		slog.Info("downloading audio via Evolution API", "from", contact)
+		dlStart := time.Now()
 		audioData, _, err := h.evolution.DownloadMediaByMessage(msg.Raw)
+		metrics.EvolutionDownloadDuration.Observe(time.Since(dlStart).Seconds())
 		if err != nil {
 			slog.Error("failed to download audio", "error", err)
 			return
@@ -194,6 +208,7 @@ func (h *Handler) processEvolutionMessage(msg *evolution.MessageData) {
 	} else {
 		if !h.filters.TranslateText() {
 			slog.Info("text translation disabled, skipping", "from", contact)
+			metrics.WebhookMessages.WithLabelValues("skipped_disabled").Inc()
 			return
 		}
 		raw := msg.TextContent()

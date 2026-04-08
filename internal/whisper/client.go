@@ -8,6 +8,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"time"
+
+	"github.com/barrymac/whisper-watch/internal/metrics"
 )
 
 type Client struct {
@@ -32,15 +34,18 @@ func NewClient(baseURL, model, language string) *Client {
 	}
 }
 
-// Transcribe returns the raw transcript in the source language (no translation).
 func (c *Client) Transcribe(filename string, audio io.Reader) (string, error) {
-	return c.callSpeaches("/v1/audio/transcriptions", filename, audio)
+	t := time.Now()
+	result, err := c.callSpeaches("/v1/audio/transcriptions", filename, audio)
+	metrics.WhisperDuration.WithLabelValues("transcribe").Observe(time.Since(t).Seconds())
+	return result, err
 }
 
-// Translate transcribes and translates to English in one step (Whisper built-in).
-// Used as fallback when ollama is unavailable.
 func (c *Client) Translate(filename string, audio io.Reader) (string, error) {
-	return c.callSpeaches("/v1/audio/translations", filename, audio)
+	t := time.Now()
+	result, err := c.callSpeaches("/v1/audio/translations", filename, audio)
+	metrics.WhisperDuration.WithLabelValues("translate").Observe(time.Since(t).Seconds())
+	return result, err
 }
 
 func (c *Client) callSpeaches(endpoint, filename string, audio io.Reader) (string, error) {

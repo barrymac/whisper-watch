@@ -240,6 +240,48 @@ func (s *Store) TodayMessages() ([]MessageRecord, error) {
 	return msgs, rows.Err()
 }
 
+type ContactWithHistory struct {
+	JID      string
+	PushName string
+	History  string
+}
+
+func (s *Store) ContactsWithHistory(jids []string, msgLimit int) ([]ContactWithHistory, error) {
+	var results []ContactWithHistory
+	for _, jid := range jids {
+		msgs, err := s.MessageHistory(jid, msgLimit)
+		if err != nil {
+			return nil, fmt.Errorf("history for %s: %w", jid, err)
+		}
+		if len(msgs) < 3 {
+			continue
+		}
+
+		name := s.ResolveName(jid)
+
+		var sb strings.Builder
+		for i := len(msgs) - 1; i >= 0; i-- {
+			m := msgs[i]
+			dir := "[them]"
+			if m.FromMe {
+				dir = "[you]"
+			}
+			content := m.TextPreview
+			if content == "" {
+				content = fmt.Sprintf("[%s]", m.MessageType)
+			}
+			sb.WriteString(fmt.Sprintf("%s %s\n", dir, content))
+		}
+
+		results = append(results, ContactWithHistory{
+			JID:      jid,
+			PushName: name,
+			History:  sb.String(),
+		})
+	}
+	return results, nil
+}
+
 func (s *Store) ContactStats() (int, int, error) {
 	var contacts, messages int
 	err := s.db.QueryRow(`SELECT count(*) FROM "Contact" WHERE "instanceId" = $1`, s.instanceID).Scan(&contacts)

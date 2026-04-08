@@ -6,3 +6,4 @@ metadata:
 data:
   MUTE_GROUPS: {{ .Values.whisperBot.muteGroups | quote }}
   MUTED_JIDS: {{ .Values.whisperBot.mutedJIDs | quote }}
+  OLLAMA_CONCURRENCY: {{ .Values.whisperBot.ollamaConcurrency | quote }}

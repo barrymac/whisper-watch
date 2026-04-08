@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/barrymac/whisper-watch/internal/metrics"
 )
 
 const alreadyEnglish = "ALREADY_ENGLISH"
@@ -72,15 +74,29 @@ const toPortuguesePrompt = `You are a professional translator specialising in En
 Translate the English text to natural, warm Brazilian Portuguese with Bahian regional style.
 Return ONLY the Portuguese translation — no explanations, no notes, no original text.`
 
+const classifyPrompt = `You are classifying a WhatsApp contact based on their conversation history.
+
+Classify into exactly ONE of these categories:
+- personal: friends, acquaintances, social contacts
+- family: family members, relatives
+- business: employers, colleagues, professional contacts
+- service: tradespeople, repair services, delivery, maintenance
+- commerce: shops, restaurants, online stores, marketplace sellers
+- government: public services, bureaucracy, utilities
+- spam: marketing, unsolicited, scam, unknown callers with no real conversation
+
+Respond with ONLY valid JSON, no markdown, no explanation:
+{"category": "<category>", "reason": "<one sentence reason>"}`
+
 const summaryPrompt = `Summarise the following WhatsApp messages received today. Group by contact, note key topics, any urgent requests, and overall tone.
 Keep it concise — bullet points preferred. No filler.`
 
 func (c *Client) FixAndTranslate(portugueseText string) (string, error) {
-	return c.chat(transcriptPrompt, portugueseText)
+	return c.chat("fix_translate", transcriptPrompt, portugueseText)
 }
 
 func (c *Client) TranslateText(text string) (string, bool, error) {
-	result, err := c.chat(textTranslatePrompt, text)
+	result, err := c.chat("translate_text", textTranslatePrompt, text)
 	if err != nil {
 		return "", false, err
 	}
@@ -91,15 +107,50 @@ func (c *Client) TranslateText(text string) (string, bool, error) {
 }
 
 func (c *Client) DraftReply(translatedText string) (string, error) {
-	return c.chat(replyPrompt, translatedText)
+	return c.chat("draft_reply", replyPrompt, translatedText)
 }
 
 func (c *Client) TranslateToPortuguese(englishText string) (string, error) {
-	return c.chat(toPortuguesePrompt, englishText)
+	return c.chat("to_portuguese", toPortuguesePrompt, englishText)
 }
 
 func (c *Client) Summarise(messagesBlock string) (string, error) {
-	return c.chat(summaryPrompt, messagesBlock)
+	return c.chat("summarise", summaryPrompt, messagesBlock)
+}
+
+type ClassifyResult struct {
+	Category string `json:"category"`
+	Reason   string `json:"reason"`
+}
+
+func (c *Client) Classify(contactName, conversationHistory string) (ClassifyResult, error) {
+	userMsg := fmt.Sprintf("Contact: %s\n\nConversation:\n%s", contactName, conversationHistory)
+	raw, err := c.chat("classify", classifyPrompt, userMsg)
+	if err != nil {
+		return ClassifyResult{Category: "unknown", Reason: "LLM error"}, err
+	}
+
+	raw = strings.TrimSpace(raw)
+	// Strip markdown fences if the LLM wraps in ```json
+	if strings.HasPrefix(raw, "```") {
+		if idx := strings.Index(raw[3:], "\n"); idx >= 0 {
+			raw = raw[3+idx+1:]
+		}
+		if strings.HasSuffix(raw, "```") {
+			raw = raw[:len(raw)-3]
+		}
+		raw = strings.TrimSpace(raw)
+	}
+
+	var result ClassifyResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		metrics.BootstrapClassified.WithLabelValues("parse_error").Inc()
+		return ClassifyResult{Category: "unknown", Reason: "parse error: " + raw}, nil
+	}
+	if result.Category == "" {
+		result.Category = "unknown"
+	}
+	return result, nil
 }
 
 func (c *Client) Model() string {
@@ -159,10 +210,21 @@ func (c *Client) ListModels() ([]ModelInfo, error) {
 	return models, nil
 }
 
-func (c *Client) chat(system, user string) (string, error) {
+func (c *Client) chat(op, system, user string) (string, error) {
 	c.mu.RLock()
 	model := c.model
 	c.mu.RUnlock()
+
+	t := time.Now()
+	result, err := c.doChat(model, system, user)
+	metrics.OllamaDuration.WithLabelValues(op).Observe(time.Since(t).Seconds())
+	if err != nil {
+		metrics.OllamaErrors.WithLabelValues(op).Inc()
+	}
+	return result, err
+}
+
+func (c *Client) doChat(model, system, user string) (string, error) {
 	payload := chatRequest{
 		Model: model,
 		Messages: []chatMessage{
