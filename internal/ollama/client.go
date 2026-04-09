@@ -36,9 +36,10 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
+	Model     string        `json:"model"`
+	Messages  []chatMessage `json:"messages"`
+	Stream    bool          `json:"stream"`
+	KeepAlive string        `json:"keep_alive,omitempty"`
 }
 
 type chatResponse struct {
@@ -163,6 +164,30 @@ func (c *Client) SetModel(model string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.model = model
+}
+
+func (c *Client) Unload(model string) error {
+	payload := chatRequest{
+		Model:     model,
+		Messages:  []chatMessage{{Role: "user", Content: ""}},
+		Stream:    false,
+		KeepAlive: "0",
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshaling unload request: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/chat", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("creating unload request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("unload request: %w", err)
+	}
+	defer resp.Body.Close()
+	return nil
 }
 
 type ModelInfo struct {

@@ -723,10 +723,18 @@ func (tb *TelegramBot) cmdModel(ctx context.Context, b *tgbot.Bot, msg *models.M
 		return
 	}
 	model := args[0]
-	tb.filters.SetOllamaModel(model)
 	if tb.ollama != nil {
+		prev := tb.ollama.Model()
+		if prev != model {
+			if err := tb.ollama.Unload(prev); err != nil {
+				slog.Warn("failed to unload previous model from VRAM", "model", prev, "error", err)
+			} else {
+				slog.Info("unloaded model from VRAM", "model", prev)
+			}
+		}
 		tb.ollama.SetModel(model)
 	}
+	tb.filters.SetOllamaModel(model)
 	tb.persistString("ollama_model", model)
 	slog.Info("ollama model switched via telegram", "model", model)
 	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Model switched to: %s", model))
