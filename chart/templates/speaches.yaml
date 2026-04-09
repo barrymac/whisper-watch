@@ -72,14 +72,8 @@ spec:
                 exit 1
               fi
               echo "GPU OK"
-              python3 -c "
-              import struct
-              wav = struct.pack('<4sI4s4sIHHIIHH4sI',
-                  b'RIFF', 36, b'WAVE', b'fmt ', 16,
-                  1, 1, 16000, 32000, 2, 16, b'data', 0)
-              open('/warmup/warmup.wav', 'wb').write(wav)
-              print('warmup.wav written')
-              "
+              printf '\x52\x49\x46\x46\x24\x00\x00\x00\x57\x41\x56\x45\x66\x6d\x74\x20\x10\x00\x00\x00\x01\x00\x01\x00\x80\x3e\x00\x00\x00\x7d\x00\x00\x02\x00\x10\x00\x64\x61\x74\x61\x00\x00\x00\x00' > /warmup/warmup.wav
+              echo "warmup.wav written ($(wc -c < /warmup/warmup.wav) bytes)"
       containers:
         - name: speaches
           image: {{ .Values.speaches.image }}
