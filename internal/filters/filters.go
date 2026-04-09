@@ -14,17 +14,15 @@ type Filters struct {
 	replyDrafts    bool
 	translateAudio bool
 	translateText  bool
-	ollamaModel    string
 }
 
-func New(muteGroups bool, mutedJIDs map[string]bool, ollamaModel string) *Filters {
+func New(muteGroups bool, mutedJIDs map[string]bool) *Filters {
 	return &Filters{
-		muteGroups:    muteGroups,
-		mutedJIDs:     mutedJIDs,
-		replyDrafts:   true,
+		muteGroups:     muteGroups,
+		mutedJIDs:      mutedJIDs,
+		replyDrafts:    true,
 		translateAudio: true,
 		translateText:  true,
-		ollamaModel:   ollamaModel,
 	}
 }
 
@@ -105,16 +103,4 @@ func (f *Filters) SetTranslateText(v bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.translateText = v
-}
-
-func (f *Filters) OllamaModel() string {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	return f.ollamaModel
-}
-
-func (f *Filters) SetOllamaModel(model string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.ollamaModel = model
 }

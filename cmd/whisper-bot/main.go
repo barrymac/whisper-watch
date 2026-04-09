@@ -90,7 +90,7 @@ func main() {
 		ollamaClient.SetModel(loaded.OllamaModel)
 	}
 
-	f := filters.New(loaded.MuteGroups, loaded.MutedJIDs, loaded.OllamaModel)
+	f := filters.New(loaded.MuteGroups, loaded.MutedJIDs)
 	f.SetTranslateAudio(loaded.TranslateAudio)
 	f.SetTranslateText(loaded.TranslateText)
 	f.SetReplyDrafts(loaded.ReplyDrafts)

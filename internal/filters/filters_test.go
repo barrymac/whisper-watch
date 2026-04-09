@@ -6,7 +6,7 @@ import (
 )
 
 func TestIsMuted_GroupBlocking(t *testing.T) {
-	f := New(true, map[string]bool{}, "qwen2.5:7b")
+	f := New(true, map[string]bool{})
 	if !f.IsMuted("557192682188-1629234117@g.us") {
 		t.Error("group JID should be blocked when muteGroups=true")
 	}
@@ -16,14 +16,14 @@ func TestIsMuted_GroupBlocking(t *testing.T) {
 }
 
 func TestIsMuted_GroupsAllowed(t *testing.T) {
-	f := New(false, map[string]bool{}, "qwen2.5:7b")
+	f := New(false, map[string]bool{})
 	if f.IsMuted("557192682188-1629234117@g.us") {
 		t.Error("group JID should not be blocked when muteGroups=false")
 	}
 }
 
 func TestIsMuted_ExplicitJID(t *testing.T) {
-	f := New(false, map[string]bool{"557192669940@s.whatsapp.net": true}, "qwen2.5:7b")
+	f := New(false, map[string]bool{"557192669940@s.whatsapp.net": true})
 	if !f.IsMuted("557192669940@s.whatsapp.net") {
 		t.Error("explicitly blocked JID should be blocked")
 	}
@@ -33,7 +33,7 @@ func TestIsMuted_ExplicitJID(t *testing.T) {
 }
 
 func TestMuteUnmute(t *testing.T) {
-	f := New(false, map[string]bool{}, "qwen2.5:7b")
+	f := New(false, map[string]bool{})
 	jid := "557192669940@s.whatsapp.net"
 
 	f.Mute(jid)
@@ -51,7 +51,7 @@ func TestMuteUnmute(t *testing.T) {
 }
 
 func TestSetMuteGroups(t *testing.T) {
-	f := New(false, map[string]bool{}, "qwen2.5:7b")
+	f := New(false, map[string]bool{})
 	group := "557192682188-1629234117@g.us"
 
 	f.SetMuteGroups(true)
@@ -69,7 +69,7 @@ func TestSetMuteGroups(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	f := New(true, map[string]bool{}, "qwen2.5:7b")
+	f := New(true, map[string]bool{})
 	var wg sync.WaitGroup
 	jid := "557192669940@s.whatsapp.net"
 
@@ -83,7 +83,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestFeatureToggles_Defaults(t *testing.T) {
-	f := New(false, map[string]bool{}, "qwen2.5:7b")
+	f := New(false, map[string]bool{})
 	if !f.ReplyDrafts() {
 		t.Error("reply drafts should be on by default")
 	}
@@ -96,7 +96,7 @@ func TestFeatureToggles_Defaults(t *testing.T) {
 }
 
 func TestFeatureToggles_Set(t *testing.T) {
-	f := New(false, map[string]bool{}, "qwen2.5:7b")
+	f := New(false, map[string]bool{})
 
 	f.SetReplyDrafts(false)
 	if f.ReplyDrafts() {

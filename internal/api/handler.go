@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/barrymac/whisper-watch/internal/bot"
@@ -20,6 +21,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+const (
+	maxConcurrentMessages = 3
+	transcribeMaxRetries  = 3
+	transcribeRetryDelay  = 5 * time.Second
+)
+
 type Handler struct {
 	whisper    *whisper.Client
 	bot        *bot.TelegramBot
@@ -29,6 +36,10 @@ type Handler struct {
 	state      *state.Store
 	ownerPhone string
 	mux        *http.ServeMux
+
+	sem     chan struct{}
+	seenMu  sync.Mutex
+	seenIDs map[string]struct{}
 }
 
 type translateResponse struct {
@@ -41,6 +52,10 @@ type errorResponse struct {
 }
 
 func NewHandler(whisperClient *whisper.Client, telegramBot *bot.TelegramBot, evolutionClient *evolution.Client, ollamaClient *ollama.Client, f *filters.Filters, stateStore *state.Store, ownerPhone string) *Handler {
+	sem := make(chan struct{}, maxConcurrentMessages)
+	for i := 0; i < maxConcurrentMessages; i++ {
+		sem <- struct{}{}
+	}
 	h := &Handler{
 		whisper:    whisperClient,
 		bot:        telegramBot,
@@ -50,6 +65,8 @@ func NewHandler(whisperClient *whisper.Client, telegramBot *bot.TelegramBot, evo
 		state:      stateStore,
 		ownerPhone: ownerPhone,
 		mux:        http.NewServeMux(),
+		sem:        sem,
+		seenIDs:    make(map[string]struct{}),
 	}
 
 	h.mux.HandleFunc("POST /v1/translate", h.handleTranslate)
@@ -66,21 +83,41 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) translateAudio(filename string, audio *bytes.Reader) (string, error) {
-	if h.ollama != nil {
-		raw, err := h.whisper.Transcribe(filename, audio)
-		if err != nil {
-			return "", fmt.Errorf("transcription: %w", err)
-		}
-		slog.Info("whisper transcription complete", "raw", raw)
-		translated, err := h.ollama.FixAndTranslate(raw)
-		if err != nil {
-			slog.Warn("ollama failed, falling back to whisper translation", "error", err)
+	var lastErr error
+	for attempt := 0; attempt < transcribeMaxRetries; attempt++ {
+		if attempt > 0 {
+			slog.Warn("retrying transcription after error", "attempt", attempt, "error", lastErr)
+			time.Sleep(transcribeRetryDelay)
 			audio.Seek(0, 0)
-			return h.whisper.Translate(filename, audio)
 		}
-		return translated, nil
+		if h.ollama != nil {
+			raw, err := h.whisper.Transcribe(filename, audio)
+			if err != nil {
+				lastErr = fmt.Errorf("transcription: %w", err)
+				continue
+			}
+			slog.Info("whisper transcription complete", "raw", raw)
+			translated, err := h.ollama.FixAndTranslate(raw)
+			if err != nil {
+				slog.Warn("ollama failed, falling back to whisper translation", "error", err)
+				audio.Seek(0, 0)
+				result, err2 := h.whisper.Translate(filename, audio)
+				if err2 != nil {
+					lastErr = fmt.Errorf("fallback translation: %w", err2)
+					continue
+				}
+				return result, nil
+			}
+			return translated, nil
+		}
+		result, err := h.whisper.Translate(filename, audio)
+		if err != nil {
+			lastErr = fmt.Errorf("translation: %w", err)
+			continue
+		}
+		return result, nil
 	}
-	return h.whisper.Translate(filename, audio)
+	return "", lastErr
 }
 
 func (h *Handler) handleTranslate(w http.ResponseWriter, r *http.Request) {
@@ -171,6 +208,21 @@ func (h *Handler) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if msg.Key.ID != "" {
+		h.seenMu.Lock()
+		_, already := h.seenIDs[msg.Key.ID]
+		if !already {
+			h.seenIDs[msg.Key.ID] = struct{}{}
+		}
+		h.seenMu.Unlock()
+		if already {
+			slog.Info("duplicate message ignored", "id", msg.Key.ID)
+			metrics.WebhookMessages.WithLabelValues("duplicate").Inc()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+	}
+
 	slog.Info("evolution webhook received",
 		"from", msg.Key.RemoteJid,
 		"name", msg.PushName,
@@ -182,7 +234,11 @@ func (h *Handler) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request)
 		msgType = "audio"
 	}
 	metrics.WebhookMessages.WithLabelValues(msgType).Inc()
-	go h.processEvolutionMessage(msg)
+	go func() {
+		<-h.sem
+		defer func() { h.sem <- struct{}{} }()
+		h.processEvolutionMessage(msg)
+	}()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -234,7 +290,6 @@ func (h *Handler) processEvolutionMessage(msg *evolution.MessageData) {
 			return
 		}
 		if h.ollama != nil {
-			h.ollama.SetModel(h.filters.OllamaModel())
 			translated, isEnglish, err := h.ollama.TranslateText(raw)
 			if err != nil {
 				slog.Warn("ollama text translation failed, forwarding original", "error", err)
@@ -259,7 +314,6 @@ func (h *Handler) processEvolutionMessage(msg *evolution.MessageData) {
 	}
 
 	if h.ollama != nil && h.filters.ReplyDrafts() {
-		h.ollama.SetModel(h.filters.OllamaModel())
 		draft, err := h.ollama.DraftReply(translatedText)
 		if err != nil {
 			slog.Warn("reply draft failed", "error", err)

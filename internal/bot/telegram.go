@@ -269,7 +269,12 @@ func (tb *TelegramBot) cmdStatus(ctx context.Context, b *tgbot.Bot, msg *models.
 	}
 
 	lines := []string{
-		fmt.Sprintf("Model: %s", tb.filters.OllamaModel()),
+		func() string {
+			if tb.ollama == nil {
+				return "Model: (not configured)"
+			}
+			return fmt.Sprintf("Model: %s", tb.ollama.Model())
+		}(),
 		fmt.Sprintf("Groups: %s", groupsStatus),
 		fmt.Sprintf("Audio: %s | Text: %s | Drafts: %s",
 			onOff(tb.filters.TranslateAudio()),
@@ -670,7 +675,6 @@ func (tb *TelegramBot) cmdSummary(ctx context.Context, b *tgbot.Bot, msg *models
 		sb.WriteString(fmt.Sprintf("[%s] %s: %s\n", m.Timestamp.Format("15:04"), name, content))
 	}
 
-	tb.ollama.SetModel(tb.filters.OllamaModel())
 	summary, err := tb.ollama.Summarise(sb.String())
 	if err != nil {
 		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("LLM failed: %v", err))
@@ -691,7 +695,6 @@ func (tb *TelegramBot) cmdTranslate(ctx context.Context, b *tgbot.Bot, msg *mode
 	}
 
 	text := strings.Join(args, " ")
-	tb.ollama.SetModel(tb.filters.OllamaModel())
 	result, err := tb.ollama.TranslateToPortuguese(text)
 	if err != nil {
 		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Translation failed: %v", err))
@@ -719,7 +722,11 @@ func (tb *TelegramBot) cmdToggle(ctx context.Context, b *tgbot.Bot, msg *models.
 
 func (tb *TelegramBot) cmdModel(ctx context.Context, b *tgbot.Bot, msg *models.Message, args []string) {
 	if len(args) == 0 {
-		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Current model: %s\nUse /models to list available.", tb.filters.OllamaModel()))
+		current := ""
+		if tb.ollama != nil {
+			current = tb.ollama.Model()
+		}
+		tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Current model: %s\nUse /models to list available.", current))
 		return
 	}
 	model := args[0]
@@ -734,7 +741,6 @@ func (tb *TelegramBot) cmdModel(ctx context.Context, b *tgbot.Bot, msg *models.M
 		}
 		tb.ollama.SetModel(model)
 	}
-	tb.filters.SetOllamaModel(model)
 	tb.persistString("ollama_model", model)
 	slog.Info("ollama model switched via telegram", "model", model)
 	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Model switched to: %s", model))
@@ -757,7 +763,7 @@ func (tb *TelegramBot) cmdModels(ctx context.Context, b *tgbot.Bot, msg *models.
 		return
 	}
 
-	current := tb.filters.OllamaModel()
+	current := tb.ollama.Model()
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Available models (%d):\n\n", len(available)))
 	for _, m := range available {
@@ -915,7 +921,6 @@ func (tb *TelegramBot) cmdBootstrap(ctx context.Context, b *tgbot.Bot, msg *mode
 		withHistory = withHistory[:count]
 	}
 
-	tb.ollama.SetModel(tb.filters.OllamaModel())
 	tb.reply(ctx, b, msg.Chat.ID, fmt.Sprintf("Classifying %d contacts (concurrency %d)...", len(withHistory), tb.ollamaConcurrency))
 
 	type classifyOutcome struct {

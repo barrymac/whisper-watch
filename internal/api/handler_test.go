@@ -18,7 +18,7 @@ func newTestHandler(f *filters.Filters) *Handler {
 }
 
 func TestHealthz(t *testing.T) {
-	h := newTestHandler(filters.New(false, map[string]bool{}, "qwen2.5:7b"))
+	h := newTestHandler(filters.New(false, map[string]bool{}))
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -31,7 +31,7 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestEvolutionWebhook_MutedGroup(t *testing.T) {
-	f := filters.New(true, map[string]bool{}, "qwen2.5:7b")
+	f := filters.New(true, map[string]bool{})
 	h := newTestHandler(f)
 
 	msg := evolution.MessageData{}
@@ -59,7 +59,7 @@ func TestEvolutionWebhook_MutedGroup(t *testing.T) {
 
 func TestEvolutionWebhook_MutedJID(t *testing.T) {
 	muted := map[string]bool{"557192669940@s.whatsapp.net": true}
-	f := filters.New(false, muted, "qwen2.5:7b")
+	f := filters.New(false, muted)
 	h := newTestHandler(f)
 
 	msg := evolution.MessageData{}
@@ -86,7 +86,7 @@ func TestEvolutionWebhook_MutedJID(t *testing.T) {
 }
 
 func TestEvolutionWebhook_SkipsFromMe(t *testing.T) {
-	f := filters.New(false, map[string]bool{}, "qwen2.5:7b")
+	f := filters.New(false, map[string]bool{})
 	h := newTestHandler(f)
 
 	msg := evolution.MessageData{}
@@ -112,7 +112,7 @@ func TestEvolutionWebhook_SkipsFromMe(t *testing.T) {
 }
 
 func TestEvolutionWebhook_IgnoresNonUpsert(t *testing.T) {
-	f := filters.New(false, map[string]bool{}, "qwen2.5:7b")
+	f := filters.New(false, map[string]bool{})
 	h := newTestHandler(f)
 
 	payload := evolution.WebhookPayload{

@@ -39,6 +39,18 @@ spec:
         - key: nvidia.com/gpu
           operator: Exists
           effect: NoSchedule
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - comfyui
+                topologyKey: nvidia.com/gpu.uuid
       initContainers:
         - name: validate-gpu
           image: nvidia/cuda:12.8.0-base-ubuntu22.04
