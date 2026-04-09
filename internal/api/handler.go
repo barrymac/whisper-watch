@@ -24,8 +24,9 @@ import (
 const (
 	maxConcurrentMessages = 3
 	transcribeMaxRetries  = 3
-	transcribeRetryDelay  = 5 * time.Second
 )
+
+var defaultTranscribeRetryDelay = 5 * time.Second
 
 type Handler struct {
 	whisper    *whisper.Client
@@ -37,9 +38,10 @@ type Handler struct {
 	ownerPhone string
 	mux        *http.ServeMux
 
-	sem     chan struct{}
-	seenMu  sync.Mutex
-	seenIDs map[string]struct{}
+	sem             chan struct{}
+	seenMu          sync.Mutex
+	seenIDs         map[string]struct{}
+	transcribeDelay time.Duration
 }
 
 type translateResponse struct {
@@ -57,16 +59,17 @@ func NewHandler(whisperClient *whisper.Client, telegramBot *bot.TelegramBot, evo
 		sem <- struct{}{}
 	}
 	h := &Handler{
-		whisper:    whisperClient,
-		bot:        telegramBot,
-		evolution:  evolutionClient,
-		ollama:     ollamaClient,
-		filters:    f,
-		state:      stateStore,
-		ownerPhone: ownerPhone,
-		mux:        http.NewServeMux(),
-		sem:        sem,
-		seenIDs:    make(map[string]struct{}),
+		whisper:         whisperClient,
+		bot:             telegramBot,
+		evolution:       evolutionClient,
+		ollama:          ollamaClient,
+		filters:         f,
+		state:           stateStore,
+		ownerPhone:      ownerPhone,
+		mux:             http.NewServeMux(),
+		sem:             sem,
+		seenIDs:         make(map[string]struct{}),
+		transcribeDelay: defaultTranscribeRetryDelay,
 	}
 
 	h.mux.HandleFunc("POST /v1/translate", h.handleTranslate)
@@ -87,7 +90,7 @@ func (h *Handler) translateAudio(filename string, audio *bytes.Reader) (string, 
 	for attempt := 0; attempt < transcribeMaxRetries; attempt++ {
 		if attempt > 0 {
 			slog.Warn("retrying transcription after error", "attempt", attempt, "error", lastErr)
-			time.Sleep(transcribeRetryDelay)
+			time.Sleep(h.transcribeDelay)
 			audio.Seek(0, 0)
 		}
 		if h.ollama != nil {
