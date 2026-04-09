@@ -46,6 +46,9 @@ spec:
           resources:
             limits:
               nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: warmup
+              mountPath: /warmup
           command:
             - sh
             - -c
@@ -57,6 +60,14 @@ spec:
                 exit 1
               fi
               echo "GPU OK"
+              python3 -c "
+              import struct
+              wav = struct.pack('<4sI4s4sIHHIIHH4sI',
+                  b'RIFF', 36, b'WAVE', b'fmt ', 16,
+                  1, 1, 16000, 32000, 2, 16, b'data', 0)
+              open('/warmup/warmup.wav', 'wb').write(wav)
+              print('warmup.wav written')
+              "
       containers:
         - name: speaches
           image: {{ .Values.speaches.image }}
@@ -79,7 +90,7 @@ spec:
                   - python3
                   - -c
                   - |
-                    import struct, urllib.request as ur, time, sys
+                    import urllib.request as ur, time, sys
                     model = "{{ .Values.speaches.model }}"
                     for _ in range(60):
                         try:
@@ -87,9 +98,7 @@ spec:
                             break
                         except Exception:
                             time.sleep(3)
-                    wav = struct.pack('<4sI4s4sIHHIIHH4sI',
-                        b'RIFF', 36, b'WAVE', b'fmt ', 16,
-                        1, 1, 16000, 32000, 2, 16, b'data', 0)
+                    wav = open('/warmup/warmup.wav', 'rb').read()
                     boundary = b'warmup'
                     body = (b'--' + boundary + b'\r\n'
                         b'Content-Disposition: form-data; name="model"\r\n\r\n' +
@@ -115,6 +124,8 @@ spec:
           volumeMounts:
             - name: model-cache
               mountPath: /root/.cache/huggingface
+            - name: warmup
+              mountPath: /warmup
           readinessProbe:
             exec:
               command:
@@ -140,6 +151,8 @@ spec:
         - name: model-cache
           persistentVolumeClaim:
             claimName: whisper-model-cache
+        - name: warmup
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
