@@ -86,6 +86,10 @@ func main() {
 		loaded = defaults
 	}
 
+	if ollamaClient != nil && loaded.OllamaModel != "" {
+		ollamaClient.SetModel(loaded.OllamaModel)
+	}
+
 	f := filters.New(loaded.MuteGroups, loaded.MutedJIDs, loaded.OllamaModel)
 	f.SetTranslateAudio(loaded.TranslateAudio)
 	f.SetTranslateText(loaded.TranslateText)
