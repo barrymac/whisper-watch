@@ -18,6 +18,8 @@ speaches:
   computeType: float16
   language: pt
 
+  minFreeVRAM: 6144
+
   storage:
     modelCache: 10Gi
 

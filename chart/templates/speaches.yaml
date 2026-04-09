@@ -39,6 +39,24 @@ spec:
         - key: nvidia.com/gpu
           operator: Exists
           effect: NoSchedule
+      initContainers:
+        - name: validate-gpu
+          image: nvidia/cuda:12.8.0-base-ubuntu22.04
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+          command:
+            - sh
+            - -c
+            - |
+              FREE=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | tr -d ' ')
+              echo "GPU free VRAM: ${FREE} MiB (need {{ .Values.speaches.minFreeVRAM }} MiB)"
+              if [ "$FREE" -lt {{ .Values.speaches.minFreeVRAM }} ]; then
+                echo "Not enough free VRAM — will retry on a different slot"
+                exit 1
+              fi
+              echo "GPU OK"
       containers:
         - name: speaches
           image: {{ .Values.speaches.image }}
