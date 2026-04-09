@@ -70,6 +70,8 @@ spec:
               value: {{ .Values.speaches.computeType }}
             - name: WHISPER__DEVICE
               value: cuda
+            - name: STT_MODEL_TTL
+              value: "-1"
           lifecycle:
             postStart:
               exec:
@@ -77,26 +79,37 @@ spec:
                   - python3
                   - -c
                   - |
-                    import urllib.request, urllib.parse, json, time, sys
+                    import struct, urllib.request as ur, time, sys
                     model = "{{ .Values.speaches.model }}"
                     for _ in range(60):
                         try:
-                            urllib.request.urlopen("http://localhost:8000/health", timeout=2)
+                            ur.urlopen("http://localhost:8000/health", timeout=2)
                             break
                         except Exception:
                             time.sleep(3)
+                    wav = struct.pack('<4sI4s4sIHHIIHH4sI',
+                        b'RIFF', 36, b'WAVE', b'fmt ', 16,
+                        1, 1, 16000, 32000, 2, 16, b'data', 0)
+                    boundary = b'warmup'
+                    body = (b'--' + boundary + b'\r\n'
+                        b'Content-Disposition: form-data; name="model"\r\n\r\n' +
+                        model.encode() + b'\r\n'
+                        b'--' + boundary + b'\r\n'
+                        b'Content-Disposition: form-data; name="file"; filename="warmup.wav"\r\n'
+                        b'Content-Type: audio/wav\r\n\r\n' + wav + b'\r\n'
+                        b'--' + boundary + b'--\r\n')
+                    req = ur.Request(
+                        'http://localhost:8000/v1/audio/transcriptions',
+                        data=body,
+                        headers={'Content-Type': 'multipart/form-data; boundary=' + boundary.decode()},
+                        method='POST',
+                    )
                     try:
-                        model_id = urllib.parse.quote(model, safe="")
-                        req = urllib.request.Request(
-                            f"http://localhost:8000/v1/models/{model_id}",
-                            data=b"",
-                            headers={"Content-Length": "0"},
-                            method="POST",
-                        )
-                        urllib.request.urlopen(req, timeout=600)
+                        ur.urlopen(req, timeout=120)
+                        print("warmup OK - model loaded into VRAM")
                     except Exception as e:
-                        print(f"model registration error (non-fatal): {e}", file=sys.stderr)
-                    sys.exit(0)
+                        print(f"warmup failed: {e}", file=sys.stderr)
+                        sys.exit(1)
           resources:
             {{- toYaml .Values.speaches.resources | nindent 12 }}
           volumeMounts:
