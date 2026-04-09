@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/barrymac/whisper-watch/internal/bot"
@@ -28,20 +28,41 @@ const (
 
 var defaultTranscribeRetryDelay = 5 * time.Second
 
+type transcribeClient interface {
+	Transcribe(filename string, audio io.Reader) (string, error)
+	Translate(filename string, audio io.Reader) (string, error)
+	Healthy() bool
+}
+
+type evolutionMessenger interface {
+	DownloadMediaByMessage(messageJSON json.RawMessage) ([]byte, string, error)
+	SendText(to, text string) error
+}
+
+type ollamaTranslator interface {
+	FixAndTranslate(text string) (string, error)
+	TranslateText(text string) (string, bool, error)
+	DraftReply(text string) (string, error)
+}
+
+type labelStorer interface {
+	SetContactLabel(jid, labelID, labelName string) error
+}
+
 type Handler struct {
-	whisper    *whisper.Client
+	whisper    transcribeClient
 	bot        *bot.TelegramBot
-	evolution  *evolution.Client
-	ollama     *ollama.Client
+	evolution  evolutionMessenger
+	ollama     ollamaTranslator
 	filters    *filters.Filters
-	state      *state.Store
+	state      labelStorer
 	ownerPhone string
 	mux        *http.ServeMux
 
 	sem             chan struct{}
-	seenMu          sync.Mutex
-	seenIDs         map[string]struct{}
+	seen            *seenSet
 	transcribeDelay time.Duration
+	afterProcess    func()
 }
 
 type translateResponse struct {
@@ -54,6 +75,10 @@ type errorResponse struct {
 }
 
 func NewHandler(whisperClient *whisper.Client, telegramBot *bot.TelegramBot, evolutionClient *evolution.Client, ollamaClient *ollama.Client, f *filters.Filters, stateStore *state.Store, ownerPhone string) *Handler {
+	return newHandler(whisperClient, telegramBot, evolutionClient, ollamaClient, f, stateStore, ownerPhone)
+}
+
+func newHandler(whisperClient transcribeClient, telegramBot *bot.TelegramBot, evolutionClient evolutionMessenger, ollamaClient ollamaTranslator, f *filters.Filters, stateStore labelStorer, ownerPhone string) *Handler {
 	sem := make(chan struct{}, maxConcurrentMessages)
 	for i := 0; i < maxConcurrentMessages; i++ {
 		sem <- struct{}{}
@@ -68,7 +93,7 @@ func NewHandler(whisperClient *whisper.Client, telegramBot *bot.TelegramBot, evo
 		ownerPhone:      ownerPhone,
 		mux:             http.NewServeMux(),
 		sem:             sem,
-		seenIDs:         make(map[string]struct{}),
+		seen:            newSeenSet(10_000),
 		transcribeDelay: defaultTranscribeRetryDelay,
 	}
 
@@ -211,19 +236,11 @@ func (h *Handler) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if msg.Key.ID != "" {
-		h.seenMu.Lock()
-		_, already := h.seenIDs[msg.Key.ID]
-		if !already {
-			h.seenIDs[msg.Key.ID] = struct{}{}
-		}
-		h.seenMu.Unlock()
-		if already {
-			slog.Info("duplicate message ignored", "id", msg.Key.ID)
-			metrics.WebhookMessages.WithLabelValues("duplicate").Inc()
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	if msg.Key.ID != "" && h.seen.seen(msg.Key.ID) {
+		slog.Info("duplicate message ignored", "id", msg.Key.ID)
+		metrics.WebhookMessages.WithLabelValues("duplicate").Inc()
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 
 	slog.Info("evolution webhook received",
@@ -239,7 +256,12 @@ func (h *Handler) handleEvolutionWebhook(w http.ResponseWriter, r *http.Request)
 	metrics.WebhookMessages.WithLabelValues(msgType).Inc()
 	go func() {
 		<-h.sem
-		defer func() { h.sem <- struct{}{} }()
+		defer func() {
+			h.sem <- struct{}{}
+			if h.afterProcess != nil {
+				h.afterProcess()
+			}
+		}()
 		h.processEvolutionMessage(msg)
 	}()
 	w.WriteHeader(http.StatusOK)
