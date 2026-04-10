@@ -40,40 +40,13 @@ spec:
           operator: Exists
           effect: NoSchedule
       affinity:
-        podAntiAffinity:
+        nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchExpressions:
-                    - key: app
-                      operator: In
-                      values:
-                        - comfyui
-                topologyKey: nvidia.com/gpu.uuid
-      initContainers:
-        - name: validate-gpu
-          image: nvidia/cuda:12.8.0-base-ubuntu22.04
-          imagePullPolicy: IfNotPresent
-          resources:
-            limits:
-              nvidia.com/gpu: "1"
-          volumeMounts:
-            - name: warmup
-              mountPath: /warmup
-          command:
-            - bash
-            - -c
-            - |
-              FREE=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | tr -d ' ')
-              echo "GPU free VRAM: ${FREE} MiB (need {{ .Values.speaches.minFreeVRAM }} MiB)"
-              if [ "$FREE" -lt {{ .Values.speaches.minFreeVRAM }} ]; then
-                echo "Not enough free VRAM — will retry on a different slot"
-                exit 1
-              fi
-              echo "GPU OK"
-              printf '\x52\x49\x46\x46\x24\x00\x00\x00\x57\x41\x56\x45\x66\x6d\x74\x20\x10\x00\x00\x00\x01\x00\x01\x00\x80\x3e\x00\x00\x00\x7d\x00\x00\x02\x00\x10\x00\x64\x61\x74\x61\x00\x00\x00\x00' > /warmup/warmup.wav
-              echo "warmup.wav written ($(wc -c < /warmup/warmup.wav) bytes)"
+              preference:
+                matchExpressions:
+                  - key: gpu.coining.it/most-free-gpu
+                    operator: Exists
       containers:
         - name: speaches
           image: {{ .Values.speaches.image }}
@@ -107,8 +80,6 @@ spec:
           volumeMounts:
             - name: model-cache
               mountPath: /root/.cache/huggingface
-            - name: warmup
-              mountPath: /warmup
           readinessProbe:
             httpGet:
               path: /health
@@ -126,8 +97,7 @@ spec:
         - name: model-cache
           persistentVolumeClaim:
             claimName: whisper-model-cache
-        - name: warmup
-          emptyDir: {}
+
 ---
 apiVersion: v1
 kind: Service
