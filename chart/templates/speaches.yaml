@@ -62,7 +62,7 @@ spec:
             - name: warmup
               mountPath: /warmup
           command:
-            - sh
+            - bash
             - -c
             - |
               FREE=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | tr -d ' ')
