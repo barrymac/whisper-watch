@@ -89,22 +89,6 @@ spec:
               value: cuda
             - name: STT_MODEL_TTL
               value: "-1"
-          lifecycle:
-            postStart:
-              exec:
-                command:
-                  - sh
-                  - -c
-                  - |
-                    for i in $(seq 1 60); do
-                      curl -sf http://localhost:8000/health && break
-                      sleep 3
-                    done
-                    curl -sf -X POST http://localhost:8000/v1/audio/transcriptions \
-                      -F "model={{ .Values.speaches.model }}" \
-                      -F "file=@/warmup/warmup.wav;type=audio/wav" \
-                      && echo "warmup OK - model loaded into VRAM" \
-                      || { echo "warmup failed" >&2; exit 1; }
           resources:
             {{- toYaml .Values.speaches.resources | nindent 12 }}
           volumeMounts:
