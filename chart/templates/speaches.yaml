@@ -93,38 +93,18 @@ spec:
             postStart:
               exec:
                 command:
-                  - python3
+                  - sh
                   - -c
                   - |
-                    import urllib.request as ur, time, sys
-                    model = "{{ .Values.speaches.model }}"
-                    for _ in range(60):
-                        try:
-                            ur.urlopen("http://localhost:8000/health", timeout=2)
-                            break
-                        except Exception:
-                            time.sleep(3)
-                    wav = open('/warmup/warmup.wav', 'rb').read()
-                    boundary = b'warmup'
-                    body = (b'--' + boundary + b'\r\n'
-                        b'Content-Disposition: form-data; name="model"\r\n\r\n' +
-                        model.encode() + b'\r\n'
-                        b'--' + boundary + b'\r\n'
-                        b'Content-Disposition: form-data; name="file"; filename="warmup.wav"\r\n'
-                        b'Content-Type: audio/wav\r\n\r\n' + wav + b'\r\n'
-                        b'--' + boundary + b'--\r\n')
-                    req = ur.Request(
-                        'http://localhost:8000/v1/audio/transcriptions',
-                        data=body,
-                        headers={'Content-Type': 'multipart/form-data; boundary=' + boundary.decode()},
-                        method='POST',
-                    )
-                    try:
-                        ur.urlopen(req, timeout=120)
-                        print("warmup OK - model loaded into VRAM")
-                    except Exception as e:
-                        print(f"warmup failed: {e}", file=sys.stderr)
-                        sys.exit(1)
+                    for i in $(seq 1 60); do
+                      curl -sf http://localhost:8000/health && break
+                      sleep 3
+                    done
+                    curl -sf -X POST http://localhost:8000/v1/audio/transcriptions \
+                      -F "model={{ .Values.speaches.model }}" \
+                      -F "file=@/warmup/warmup.wav;type=audio/wav" \
+                      && echo "warmup OK - model loaded into VRAM" \
+                      || { echo "warmup failed" >&2; exit 1; }
           resources:
             {{- toYaml .Values.speaches.resources | nindent 12 }}
           volumeMounts:
